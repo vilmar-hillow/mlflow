@@ -271,8 +271,11 @@ class EnvironmentVariableConfigProvider(DatabricksConfigProvider):
         refresh_token = os.environ.get("DATABRICKS_REFRESH_TOKEN")
         insecure = os.environ.get("DATABRICKS_INSECURE")
         jobs_api_version = os.environ.get("DATABRICKS_JOBS_API_VERSION")
-        client_id = os.environ.get("DATABRICKS_CLIENT_ID")
-        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET")
+        client_id = os.environ.get("DATABRICKS_CLIENT_ID") or os.environ.get("ARM_CLIENT_ID")
+        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET") or os.environ.get(
+            "ARM_CLIENT_SECRET"
+        )
+        auth_type = os.environ.get("DATABRICKS_AUTH_TYPE")
 
         config = DatabricksConfig(
             host,
@@ -284,6 +287,7 @@ class EnvironmentVariableConfigProvider(DatabricksConfigProvider):
             jobs_api_version,
             client_id=client_id,
             client_secret=client_secret,
+            auth_type=auth_type,
         )
         if config.is_valid:
             return config
@@ -469,6 +473,14 @@ class DatabricksConfig:
         return self.auth_type == "azure-cli"
 
     @property
+    def is_azure_client_secret_auth_type(self):
+        return self.auth_type == "azure-client-secret"
+
+    @property
+    def is_azure_msi_auth_type(self):
+        return self.auth_type == "azure-msi"
+
+    @property
     def is_valid(self):
         return (
             self.is_valid_with_token
@@ -476,4 +488,6 @@ class DatabricksConfig:
             or self.is_valid_with_client_id_secret
             or self.is_databricks_cli_auth_type
             or self.is_azure_cli_auth_type
+            or self.is_azure_client_secret_auth_type
+            or self.is_azure_msi_auth_type
         )

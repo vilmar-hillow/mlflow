@@ -13,6 +13,7 @@ from mlflow.exceptions import MlflowException
 from mlflow.legacy_databricks_cli.configure.provider import (
     DatabricksConfig,
     DatabricksModelServingConfigProvider,
+    EnvironmentVariableConfigProvider,
 )
 from mlflow.utils import databricks_utils
 from mlflow.utils.databricks_utils import (
@@ -34,7 +35,6 @@ from mlflow.utils.databricks_utils import (
     is_running_in_ipython_environment,
 )
 from mlflow.utils.os import is_windows
-
 from tests.helper_functions import mock_method_chain
 from tests.pyfunc.test_spark import spark  # noqa: F401
 
@@ -1117,3 +1117,127 @@ def test_get_databricks_local_temp_dir():
     ):
         assert databricks_utils.get_databricks_local_temp_dir() == "/local/user"
         mock_dbutils2.entry_point.getUserLocalTempDir.assert_called_once()
+
+
+def test_env_var_config_provider_reads_auth_type(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-cli")
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.host == "https://my-host.databricks.com"
+    assert config.auth_type == "azure-cli"
+    assert config.is_valid
+
+
+def test_env_var_config_provider_azure_cli_without_token(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-cli")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.is_valid
+    assert config.is_azure_cli_auth_type
+    assert config.token is None
+
+
+def test_env_var_config_provider_azure_client_secret_reads_arm_env_vars(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-client-secret")
+    monkeypatch.setenv("ARM_CLIENT_ID", "my-arm-client-id")
+    monkeypatch.setenv("ARM_CLIENT_SECRET", "my-arm-client-secret")
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.host == "https://my-host.databricks.com"
+    assert config.auth_type == "azure-client-secret"
+    assert config.client_id == "my-arm-client-id"
+    assert config.client_secret == "my-arm-client-secret"
+    assert config.is_valid
+    assert config.is_azure_client_secret_auth_type
+    assert config.token is None
+
+
+def test_env_var_config_provider_azure_client_secret_databricks_vars_take_precedence(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-client-secret")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "databricks-client-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "databricks-client-secret")
+    monkeypatch.setenv("ARM_CLIENT_ID", "arm-client-id")
+    monkeypatch.setenv("ARM_CLIENT_SECRET", "arm-client-secret")
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.client_id == "databricks-client-id"
+    assert config.client_secret == "databricks-client-secret"
+    assert config.is_valid
+    assert config.is_azure_client_secret_auth_type
+
+
+def test_env_var_config_provider_azure_client_secret_only_auth_type(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-client-secret")
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ARM_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ARM_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.is_valid
+    assert config.is_azure_client_secret_auth_type
+
+
+def test_env_var_config_provider_azure_msi_auth_type(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-msi")
+    monkeypatch.setenv("ARM_USE_MSI", "true")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ARM_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ARM_CLIENT_SECRET", raising=False)
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.host == "https://my-host.databricks.com"
+    assert config.auth_type == "azure-msi"
+    assert config.is_valid
+    assert config.is_azure_msi_auth_type
+    assert config.token is None
+    assert config.client_id is None
+    assert config.client_secret is None
+
+
+def test_env_var_config_provider_azure_msi_with_client_id(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "azure-msi")
+    monkeypatch.setenv("ARM_USE_MSI", "true")
+    monkeypatch.setenv("ARM_CLIENT_ID", "my-msi-client-id")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ARM_CLIENT_SECRET", raising=False)
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.is_valid
+    assert config.is_azure_msi_auth_type
+    assert config.client_id == "my-msi-client-id"
+    assert config.token is None
+    assert config.client_secret is None
+
+
+def test_env_var_config_provider_databricks_cli_auth_type(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://my-host.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "databricks-cli")
+
+    config = EnvironmentVariableConfigProvider().get_config()
+    assert config is not None
+    assert config.is_valid
+    assert config.is_databricks_cli_auth_type
